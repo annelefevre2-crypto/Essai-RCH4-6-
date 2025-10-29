@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RCH4 IA • OCR (zone à 4 coins noirs) + QR → Prompt ChatGPT</title>
+
+  <!-- Librairies externes -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+
+  <!-- Styles visuels -->
+  <style>
+    body { margin:0; font-family: system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#0b1220; color:#e5e7eb; }
+    header { padding:14px 18px; background:linear-gradient(90deg,#0ea5e9,#06b6d4); color:#001018; font-weight:800; }
+    main { max-width:980px; margin:24px auto; padding:0 16px 40px; display:grid; gap:16px; }
+    .card { background:#111827cc; border:1px solid #1f2a3a; border-radius:16px; padding:16px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    button { background:#06b6d4; border:none; color:#001018; font-weight:700; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    button.secondary { background:transparent; border:1px solid #334155; color:#e5e7eb; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    video, canvas { width:100%; border-radius:12px; background:#0f172a; border:1px dashed #334155; min-height:260px; display:block; }
+    textarea { width:100%; min-height:220px; border-radius:12px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; padding:12px; font-size:14px; }
+    .hint { color:#94a3b8; font-size:12px; }
+    .progress { height:6px; background:#0b1220; border-radius:999px; overflow:hidden; border:1px solid #1f2a3a; }
+    .bar { height:100%; width:0; background:#06b6d4; transition:width .3s ease; }
+  </style>
+</head>
+
+<body>
+<header>
+  RCH4 IA — Détection de cadre à 4 coins noirs + OCR + QR
+</header>
+
+<main>
+  <!-- SECTION 1 : acquisition -->
+  <section class="card">
+    <h2>1️⃣ Prendre une photo ou importer une fiche</h2>
+    <div class="row">
+      <button id="btnStart">Activer la caméra</button>
+      <button id="btnShot" class="secondary" disabled>Capturer</button>
+      <input id="file" type="file" accept="image/*,.pdf" capture="environment" style="display:none">
+      <button id="btnUpload" class="secondary">Importer une image ou PDF</button>
+    </div>
+    <div class="hint">
+      La fiche doit présenter 4 carrés noirs aux coins de la zone blanche. Le QR code reste dans le bandeau bleu.
+    </div>
+    <video id="video" playsinline></video>
+    <canvas id="canvas" hidden></canvas>
+  </section>
+
+  <!-- SECTION 2 : traitement -->
+  <section class="card">
+    <h2>2️⃣ Traitement (OCR zone blanche + lecture QR)</h2>
+    <div class="row">
+      <button id="btnProcess" disabled>Lancer le traitement</button>
+      <button id="btnClear" class="secondary">Effacer</button>
+    </div>
+    <div class="progress" style="margin:10px 0"><div id="bar" class="bar"></div></div>
+    <div id="status" class="hint">Prêt.</div>
+    <textarea id="result" placeholder="Texte OCR (zone blanche) + QR code…"></textarea>
+  </section>
+
+  <!-- SECTION 3 : génération du prompt -->
+  <section class="card">
+    <h2>3️⃣ Générer un prompt RCH4 et l’envoyer à ChatGPT</h2>
+    <textarea id="prompt"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button id="btnOpen">Ouvrir dans ChatGPT</button>
+      <button id="btnCopy" class="secondary">Copier le prompt</button>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ---------------------------------------------------------
+   📦 Initialisation & variables
+--------------------------------------------------------- */
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let capturedImage = null;
+
+const btnStart = document.getElementById('btnStart');
+const btnShot = document.getElementById('btnShot');
+const btnUpload = document.getElementById('btnUpload');
+const fileInput = document.getElementById('file');
+const btnProcess = document.getElementById('btnProcess');
+const btnClear = document.getElementById('btnClear');
+const statusEl = document.getElementById('status');
+const bar = document.getElementById('bar');
+const resultEl = document.getElementById('result');
+const promptEl = document.getElementById('prompt');
+
+function setStatus(msg, progress = 0) {
+  statusEl.textContent = msg;
+  bar.style.width = (progress * 100) + "%";
+}
+function showCanvas() { video.hidden = true; canvas.hidden = false; }
+
+/* ---------------------------------------------------------
+   🎥 Capture caméra ou import
+--------------------------------------------------------- */
+btnStart.onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = stream;
+    await video.play();
+    btnShot.disabled = false;
+    setStatus("Caméra activée");
+  } catch (err) {
+    alert("Erreur caméra : " + err.message);
+  }
+};
+
+btnShot.onclick = () => {
+  const w = video.videoWidth || 1280;
+  const h = video.videoHeight || 720;
+  canvas.width = w; canvas.height = h;
+  ctx.drawImage(video, 0, 0, w, h);
+  capturedImage = canvas.toDataURL("image/png");
+  showCanvas();
+  btnProcess.disabled = false;
+};
+
+btnUpload.onclick = () => fileInput.click();
+
+fileInput.onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.type === "application/pdf") {
+    // PDF → image
+    const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
+    const page = await pdf.getPage(1);
+    const vp = page.getViewport({ scale: 2 });
+    canvas.width = vp.width; canvas.height = vp.height;
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  } else {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = URL.createObjectURL(file);
+  }
+  capturedImage = canvas.toDataURL("image/png");
+  showCanvas();
+  btnProcess.disabled = false;
+};
+
+btnClear.onclick = () => {
+  resultEl.value = "";
+  promptEl.value = "";
+  bar.style.width = "0%";
+  setStatus("Prêt.");
+};
+
+/* ---------------------------------------------------------
+   🧭 Détection des 4 coins noirs (fiducials simples)
+   - On recherche des pixels "très sombres" et on localise
+     la boîte englobante extrême, puis on applique une marge
+     pour retirer les marqueurs eux-mêmes.
+--------------------------------------------------------- */
+function detectFourCorners(step = 3, darkThreshold = 50) {
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = img.data;
+  const darkPixels = [];
+  for (let y = 0; y < canvas.height; y += step) {
+    for (let x = 0; x < canvas.width; x += step) {
+      const i = (y * canvas.width + x) * 4;
+      const Y = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+      if (Y < darkThreshold) darkPixels.push({ x, y });
+    }
+  }
+  if (darkPixels.length < 300) return null;
+
+  const minX = Math.min(...darkPixels.map(p => p.x));
+  const maxX = Math.max(...darkPixels.map(p => p.x));
+  const minY = Math.min(...darkPixels.map(p => p.y));
+  const maxY = Math.max(...darkPixels.map(p => p.y));
+
+  const margin = Math.round(Math.min(canvas.width, canvas.height) * 0.03);
+  return {
+    minX: Math.max(0, minX + margin),
+    minY: Math.max(0, minY + margin),
+    maxX: Math.min(canvas.width,  maxX - margin),
+    maxY: Math.min(canvas.height, maxY - margin)
+  };
+}
+
+/* Recadre le canvas à la zone détectée */
+function cropToBox(box) {
+  const w = box.maxX - box.minX;
+  const h = box.maxY - box.minY;
+  const temp = document.createElement("canvas");
+  temp.width = w; temp.height = h;
+  temp.getContext("2d").drawImage(canvas, box.minX, box.minY, w, h, 0, 0, w, h);
+  canvas.width = w; canvas.height = h;
+  ctx.drawImage(temp, 0, 0);
+}
+
+/* ---------------------------------------------------------
+   🔎 Lecture du QR + OCR de la zone recadrée
+--------------------------------------------------------- */
+function readQR() {
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const qr = jsQR(img.data, canvas.width, canvas.height, { inversionAttempts: "attemptBoth" });
+  return qr ? qr.data : "";
+}
+
+async function doOCR(dataURL) {
+  const res = await Tesseract.recognize(dataURL, "fra+eng", {
+    langPath: "https://tessdata.projectnaptha.com/4.0.0_best/",
+    tessedit_pageseg_mode: "6",
+    preserve_interword_spaces: "1"
+  });
+  return res.data.text || "";
+}
+
+/* ---------------------------------------------------------
+   🚀 Pipeline principal
+--------------------------------------------------------- */
+btnProcess.onclick = async () => {
+  if (!capturedImage) return alert("Aucune image disponible");
+
+  try {
+    setStatus("Détection du QR code…", 0.1);
+    const qr = readQR();
+
+    setStatus("Détection des 4 coins noirs…", 0.2);
+    const zone = detectFourCorners(3, 50);
+    if (zone) cropToBox(zone);
+    else setStatus("Cadre non détecté, OCR sur toute l'image", 0.25);
+
+    setStatus("OCR en cours…", 0.5);
+    const text = await doOCR(canvas.toDataURL("image/png"));
+
+    const combined = `# Texte OCR (zone blanche)\n${text}\n\n# QR code\n${qr || "(aucun QR détecté)"}`;
+    resultEl.value = combined;
+
+    const prompt = `Assistant IA RCH4 : exploite les données suivantes pour aider le conseiller technique à :\n- analyser le produit (ONU, danger, CAS)\n- interpréter les données chimiques/toxiques\n- proposer une synthèse utilisable sur intervention\n---\n${combined}`;
+    promptEl.value = prompt;
+    setStatus("Terminé", 1);
+  } catch (err) {
+    alert("Erreur : " + err.message);
+    setStatus("Erreur", 1);
+  }
+};
+
+/* ---------------------------------------------------------
+   📤 Boutons d’action : copier / ouvrir ChatGPT
+--------------------------------------------------------- */
+document.getElementById("btnCopy").onclick = async () => {
+  await navigator.clipboard.writeText(promptEl.value || resultEl.value || "");
+  alert("Prompt copié !");
+};
+
+document.getElementById("btnOpen").onclick = () => {
+  const q = encodeURIComponent(promptEl.value || resultEl.value || "");
+  if (!q) return alert("Prompt vide");
+  window.open("https://chat.openai.com/?q=" + q, "_blank");
+};
+</script>
+</body>
+</html>
