@@ -158,6 +158,7 @@ btnClear.onclick = () => {
   promptEl.value = "";
   bar.style.width = "0%";
   setStatus("Prêt.");
+  downscaleIfNeeded()
 };
 
   function detectFourCorners(step = 3, darkThreshold = 50) {
@@ -255,6 +256,22 @@ btnProcess.onclick = async () => {
   }
 };
 
+/* ---------------------------------------------------------
+ Redimensionner avant détection (utile sur des photos 4K) :
+--------------------------------------------------------- */
+
+function downscaleIfNeeded(maxDim = 1600) {
+  const { width, height } = canvas;
+  const scale = Math.min(1, maxDim / Math.max(width, height));
+  if (scale === 1) return;
+  const tmp = document.createElement('canvas');
+  tmp.width = Math.round(width * scale);
+  tmp.height = Math.round(height * scale);
+  tmp.getContext('2d').drawImage(canvas, 0, 0, tmp.width, tmp.height);
+  canvas.width = tmp.width; canvas.height = tmp.height;
+  ctx.drawImage(tmp, 0, 0);
+}
+  
 /* ---------------------------------------------------------
    📤 Boutons d’action : copier / ouvrir ChatGPT
 --------------------------------------------------------- */
